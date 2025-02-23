@@ -1,101 +1,172 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from "react";
+import { Send, X, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
+
+interface Article {
+  title: string;
+  content: string;
+}
+
+interface Message {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  references?: Article[];
+}
+
+export default function ChatInterface() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    }, 100);
+  }, [messages]);
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+
+    const userMessage: Message = { id: Date.now().toString(), role: "user", content: input };
+    setMessages(prev => [...prev, userMessage]);
+    setInput("");
+    setIsLoading(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [...messages, userMessage] }),
+      });
+
+      if (!response.ok) throw new Error("Failed to get response");
+
+      const data = await response.json();
+      
+      setMessages(prev => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "assistant",
+          content: data.response || "Sorry, no response was generated.",
+          references: data.references || [],
+        },
+      ]);
+    } catch (error) {
+      console.error("Error:", error);
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now().toString(), role: "assistant", content: "Sorry, I encountered an error processing your request." },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+    <div className="flex items-center justify-center min-h-screen bg-gray-100 p-6">
+      <Card className="w-full max-w-5xl h-[85vh] flex flex-col">
+        <CardHeader className="border-b bg-white">
+          <CardTitle className="text-xl text-gray-800">AI Chat Assistant</CardTitle>
+        </CardHeader>
+        <CardContent className="flex-grow overflow-hidden pt-6">
+          <ScrollArea className="h-full pr-4" ref={scrollRef}>
+            <div className="space-y-4">
+              {messages.map((m) => (
+                <div 
+                  key={m.id} 
+                  className={cn(
+                    "p-4 rounded-lg",
+                    m.role === "user" 
+                      ? "bg-blue-50 ml-12" 
+                      : "bg-white border border-gray-200 mr-12"
+                  )}
+                >
+                  <p className="font-semibold text-sm text-gray-600 mb-2">
+                    {m.role === "user" ? "You" : "AI Assistant"}
+                  </p>
+                  <p className="text-gray-800 leading-relaxed">{m.content}</p>
+                  {m.role === "assistant" && m.references && m.references.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      <p className="text-sm font-medium text-gray-600 mb-2">Referenced Articles:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {m.references.map((ref, index) => (
+                          <Button
+                            key={index}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedArticle(prev => (prev?.title === ref.title ? null : ref))}
+                            className="text-xs hover:bg-gray-50"
+                          >
+                            {ref.title}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {isLoading && (
+                <div className="p-4 rounded-lg bg-white border border-gray-200 mr-12 animate-pulse">
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>AI is thinking...</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        </CardContent>
+        <CardFooter className="border-t bg-white p-4">
+          <form onSubmit={handleSubmit} className="flex w-full space-x-2">
+            <Input 
+              value={input} 
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setInput(e.target.value)} 
+              placeholder="Type your message..." 
+              className="flex-grow shadow-sm focus:ring-2 focus:ring-blue-100"
+              disabled={isLoading} 
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+            <Button 
+              type="submit" 
+              disabled={!input.trim() || isLoading}
+              className="shadow-sm"
+            >
+              <Send className="w-4 h-4" />
+            </Button>
+          </form>
+        </CardFooter>
+      </Card>
+
+      {selectedArticle && (
+        <div className="fixed right-6 top-6 w-96 border border-gray-200 bg-white shadow-xl rounded-lg">
+          <div className="flex justify-between items-center p-4 border-b">
+            <h2 className="font-medium text-gray-800 line-clamp-1">{selectedArticle.title}</h2>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => setSelectedArticle(null)}
+              className="hover:bg-gray-50"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+          <ScrollArea className="p-4 max-h-[70vh]">
+            <div className="text-gray-700 leading-relaxed">
+              {selectedArticle.content}
+            </div>
+          </ScrollArea>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      )}
     </div>
   );
 }

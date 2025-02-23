@@ -1,0 +1,18 @@
+{
+  "articles_3": [
+    {
+      "title": "Schneider Electric Strengthens OT Security with SCADAPack RTU Upgrade",
+      "publishDate": "2025-02-12",
+      "source": "P&GJ",
+      "summary": "Schneider Electric has enhanced cybersecurity features in its SCADAPack 470i and 474i remote terminal units (RTUs) by introducing role-based access control and IT security integration. These updates aim to protect critical infrastructure like water systems and oil and gas pipelines from increasing cyber threats while simplifying access control through standard IT tools such as Active Directory.",
+      "topics": [
+        "Cybersecurity",
+        "Industrial automation",
+        "Critical infrastructure",
+        "Remote monitoring",
+        "Pipeline technology"
+      ],
+      "content": "Schneider Electric has introduced new cybersecurity features for its SCADAPack 470i and 474i remote terminal units (RTUs), aiming to enhance operational technology (OT) security for critical infrastructure..."
+    }
+  ]
+}
