@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ChatOpenAI } from '@langchain/openai';
-import { AIMessage, HumanMessage, BaseMessage, SystemMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, BaseMessage } from '@langchain/core/messages';
 import fs from 'fs';
 import path from 'path';
 
@@ -39,7 +39,7 @@ export async function POST(req: Request) {
       // Collect articles from all articles_N arrays
       articles = Object.entries(jsonData)
         .filter(([key]) => key.startsWith('articles_'))
-        .reduce((acc, [, value]) => {
+        .reduce((acc, [_, value]) => {
           if (Array.isArray(value)) {
             acc.push(...value);
           }
@@ -72,9 +72,16 @@ export async function POST(req: Request) {
       msg.role === 'user' ? new HumanMessage(msg.content) : new AIMessage(msg.content)
     );
 
-    const model = new ChatOpenAI({
+    // Initialize models
+    const modelFirstCall = new ChatOpenAI({
       openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: 'gpt-4o',
+      modelName: 'gpt-4o', // First call uses GPT-4o
+      temperature: 0.7,
+    });
+
+    const modelSecondCall = new ChatOpenAI({
+      openAIApiKey: process.env.OPENAI_API_KEY,
+      modelName: 'gpt-o1', // Second call uses GPT-o1
       temperature: 0.7,
     });
 
@@ -90,26 +97,21 @@ Content: ${content.slice(0, 500)}...`;
       })
       .join('\n\n');
 
-    // First prompt for relevance with explicit system message
+    // First prompt for relevance using GPT-4o
     const relevancePrompt: BaseMessage[] = [
-      new SystemMessage(
-        `You are a helpful assistant that identifies relevant articles based on user queries. 
-        Your response must ONLY be a JSON array of article titles, with no additional text. 
-        Example valid response: ["Title 1", "Title 2"]`
-      ),
       new HumanMessage(
-        `Based on the following user query, return ONLY a JSON array of relevant article titles from the provided articles.
-        
+        `Here are some articles stored in JSON format. Based on the user's query, return ONLY a valid JSON array of article titles that best match the query. **Do not include any extra text, markdown, or explanations.**
+Example valid response:
+["Title 1", "Title 2"]
 Articles:
-${articlesContent}
-
-Query: ${langChainMessages[langChainMessages.length - 1].content}`
-      )
+${articlesContent}`
+      ),
+      ...langChainMessages
     ];
 
-    const relevanceResponse = await model.call(relevancePrompt);
+    const relevanceResponse = await modelFirstCall.call(relevancePrompt);
 
-    // Parse AI response with better error handling
+    // Parse AI response
     let relevantTitles: string[] = [];
     try {
       const cleanedResponse = (relevanceResponse.content as string)
@@ -117,26 +119,14 @@ Query: ${langChainMessages[langChainMessages.length - 1].content}`
         .replace(/```/g, '')
         .trim();
       
-      // Add square brackets if they're missing
-      const jsonString = cleanedResponse.startsWith('[') ? 
-        cleanedResponse : 
-        `[${cleanedResponse}]`;
-      
-      relevantTitles = JSON.parse(jsonString);
+      relevantTitles = JSON.parse(cleanedResponse);
       
       if (!Array.isArray(relevantTitles)) {
         throw new Error('Response is not an array');
       }
-
-      // Validate that all titles exist in the articles
-      relevantTitles = relevantTitles.filter(title => 
-        articles.some(article => article.title === title)
-      );
-
     } catch (error) {
       console.error('Error parsing relevant article titles:', error);
-      // Fallback: use all articles if parsing fails
-      relevantTitles = articles.map(article => article.title);
+      return NextResponse.json({ error: 'Invalid AI response format.' }, { status: 500 });
     }
 
     // Filter articles
@@ -148,52 +138,58 @@ Query: ${langChainMessages[langChainMessages.length - 1].content}`
       return NextResponse.json({ error: 'No relevant articles found.' }, { status: 404 });
     }
 
-    // Second prompt with selected articles and system message
-    const answerPrompt: BaseMessage[] = [
-        new SystemMessage(
-          `You are a scientific research assistant tasked with answering questions based on provided context. 
-          Your goal is to provide accurate, well-reasoned responses drawing primarily from the information given in the context article.`
-        ),
-        new HumanMessage(
-          `<context_article>
-      ${selectedArticles
-        .map((article: Article) => `Title: ${article.title}
-      ${article.publishDate ? `Date: ${article.publishDate}` : ''}
-      ${article.source ? `Source: ${article.source}` : ''}
-      ${article.summary ? `Summary: ${article.summary}` : ''}
-      Content: ${article.content}`)
-        .join('\n\n')}
-      </context_article>
-      
-      <user_prompt>
-      ${langChainMessages[langChainMessages.length - 1].content}
-      </user_prompt>
-      
-      Your task is to answer this question in a scientifically accurate manner. Follow these steps:
-      
-      1. Carefully analyze the user's question against the context provided in the article.
-      2. Identify key information from the context article that is relevant to the question.
-      3. Perform any necessary analysis or reasoning based on the information in the article. This may include:
-         - Comparing and contrasting different pieces of information
-         - Drawing logical conclusions from the provided data
-         - Identifying patterns or trends
-         - Evaluating the strength of evidence for different claims
-      4. Formulate a clear, concise, and scientifically accurate answer to the user's question.
-      
-      Important guidelines:
-      - Base your response primarily on the information provided in the context article.
-      - If the article does not contain sufficient information to fully answer the question, state this clearly and explain what additional information would be needed.
-      - Do not introduce external information or speculation beyond what is provided in the context article.
-      - If there are multiple interpretations or possibilities based on the given information, explain these clearly.
-      - Use scientific terminology appropriately and explain any complex concepts in a way that is accessible to a general audience.
-      
-      Remember to maintain a neutral, objective tone throughout your response and prioritize scientific accuracy above all else.`
-        ),
-        ...langChainMessages
-      ];
-      
+    // Build the full context article for the second prompt
+    const contextArticle = selectedArticles
+      .map((article: Article) => `Title: ${article.title}
+${article.publishDate ? `Date: ${article.publishDate}` : ''}
+${article.source ? `Source: ${article.source}` : ''}
+${article.summary ? `Summary: ${article.summary}` : ''}
+Content: ${article.content}`)
+      .join('\n\n');
 
-    const finalResponse = await model.call(answerPrompt);
+    // Extract the user prompt
+    const userPrompt = messages.find(msg => msg.role === 'user')?.content || '';
+
+    // Second prompt using GPT-o1 with the research assistant structure
+    const answerPrompt: BaseMessage[] = [
+      new HumanMessage(
+        `You are a scientific research assistant tasked with answering questions based on provided context. Your goal is to provide accurate, well-reasoned responses drawing primarily from the information given in the context article.
+
+First, carefully read and analyze the following context article:
+
+<context_article>
+${contextArticle}
+</context_article>
+
+Now, consider the following question from a user:
+
+<user_prompt>
+${userPrompt}
+</user_prompt>
+
+Your task is to answer this question in a scientifically accurate manner. Follow these steps:
+
+1. Carefully analyze the user's question against the context provided in the article.
+2. Identify key information from the context article that is relevant to the question.
+3. Perform any necessary analysis or reasoning based on the information in the article. This may include:
+   - Comparing and contrasting different pieces of information
+   - Drawing logical conclusions from the provided data
+   - Identifying patterns or trends
+   - Evaluating the strength of evidence for different claims
+4. Formulate a clear, concise, and scientifically accurate answer to the user's question.
+
+Important guidelines:
+- Base your response primarily on the information provided in the context article.
+- If the article does not contain sufficient information to fully answer the question, state this clearly and explain what additional information would be needed.
+- Do not introduce external information or speculation beyond what is provided in the context article.
+- If there are multiple interpretations or possibilities based on the given information, explain these clearly.
+- Use scientific terminology appropriately and explain any complex concepts in a way that is accessible to a general audience.
+
+Remember to maintain a neutral, objective tone throughout your response and prioritize scientific accuracy above all else.`
+      )
+    ];
+
+    const finalResponse = await modelSecondCall.call(answerPrompt);
 
     return NextResponse.json({
       response: finalResponse.content,
