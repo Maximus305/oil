@@ -39,7 +39,7 @@ export async function POST(req: Request) {
       // Collect articles from all articles_N arrays
       articles = Object.entries(jsonData)
         .filter(([key]) => key.startsWith('articles_'))
-        .reduce((acc, [_, value]) => {
+        .reduce((acc, [, value]) => {
           if (Array.isArray(value)) {
             acc.push(...value);
           }
