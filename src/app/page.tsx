@@ -98,7 +98,7 @@ export default function ChatInterface() {
       console.error("Error:", error);
       setMessages(prev => [
         ...prev,
-        { id: Date.now().toString(), role: "assistant", content: "Sorry, I encountered an error processing your request." },
+        { id: Date.now().toString(), role: "assistant", content: "Sorry, Your topic isn't related to the provided articles" },
       ]);
     } finally {
       setIsLoading(false);
