@@ -152,7 +152,7 @@ export default function ChatInterface() {
       <header className="h-16 flex items-center justify-between px-6 bg-white bg-opacity-80 backdrop-blur-sm">
         <div className="flex items-center space-x-2">
           <MessageSquare className="w-5 h-5 text-gray-700" />
-          <h1 className="text-xl font-medium text-gray-800">Chat</h1>
+          <h1 className="text-xl font-medium text-gray-800">Research Assistant</h1>
         </div>
         <Button 
           variant="outline" 
@@ -225,7 +225,7 @@ export default function ChatInterface() {
             {isLoading && (
               <div className="mb-6">
                 <div className="text-xs text-gray-500 mb-1 px-1">
-                  Assistant
+                  AI Researcher
                 </div>
                 <div className="p-4 rounded-xl shadow-sm bg-white">
                   <div className="flex space-x-1">
