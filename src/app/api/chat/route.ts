@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 
 interface Article {
+  id: string;
   title: string;
   content: string;
   publishDate?: string;
@@ -21,11 +22,12 @@ interface ChatMessage {
 export async function POST(req: Request) {
   try {
     const { messages }: { messages: ChatMessage[] } = await req.json();
+    const userPrompt = messages.find(msg => msg.role === 'user')?.content || '';
 
-    // File reading and parsing
+    // Fetching articles
     const articlesDir = path.join(process.cwd(), 'data', 'articles');
     const filePath = path.join(articlesDir, 'article.json');
-    
+
     if (!fs.existsSync(filePath)) {
       console.error('Articles file not found:', filePath);
       return NextResponse.json({ error: 'Articles data not found.' }, { status: 404 });
@@ -36,25 +38,14 @@ export async function POST(req: Request) {
       const fileContent = fs.readFileSync(filePath, 'utf-8');
       const jsonData = JSON.parse(fileContent);
       
-      // Collect articles from all articles_N arrays
       articles = Object.entries(jsonData)
         .filter(([key]) => key.startsWith('articles_'))
-        .reduce((acc, [, value]) => {
+        .reduce((acc, [_, value]) => {
           if (Array.isArray(value)) {
             acc.push(...value);
           }
           return acc;
         }, [] as Article[]);
-
-      // Validate articles format
-      if (!articles.every(article => 
-        article && 
-        typeof article === 'object' && 
-        typeof article.title === 'string' && 
-        typeof article.content === 'string'
-      )) {
-        throw new Error('Invalid article format in data');
-      }
 
       if (articles.length === 0) {
         return NextResponse.json({ error: 'No valid articles found.' }, { status: 404 });
@@ -62,9 +53,12 @@ export async function POST(req: Request) {
 
     } catch (error) {
       console.error('Error reading or parsing articles:', error);
-      return NextResponse.json({ 
-        error: 'Failed to load articles. Please check your JSON structure.' 
-      }, { status: 500 });
+      return NextResponse.json({ error: 'Failed to load articles. Please check JSON structure.' }, { status: 500 });
+    }
+
+    // **Return all articles when explicitly requested**
+    if (userPrompt.toLowerCase().includes("fetch all articles")) {
+      return NextResponse.json({ articles });
     }
 
     // Convert messages to LangChain format
@@ -72,73 +66,76 @@ export async function POST(req: Request) {
       msg.role === 'user' ? new HumanMessage(msg.content) : new AIMessage(msg.content)
     );
 
-    // Initialize models
+    // AI Query (Find relevant articles)
     const modelFirstCall = new ChatOpenAI({
       openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: 'gpt-4o', // First call uses GPT-4o
+      modelName: 'gpt-4o',
       temperature: 0.7,
     });
 
-    const modelSecondCall = new ChatOpenAI({
-      openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: 'gpt-o1', // Second call uses GPT-o1
-      temperature: 0.7,
-    });
-
-    // Build articles content string with additional metadata
     const articlesContent = articles
-      .map((article: Article) => {
-        const { title, content, publishDate, source, summary } = article;
-        return `Title: ${title}
-${publishDate ? `Date: ${publishDate}` : ''}
-${source ? `Source: ${source}` : ''}
-${summary ? `Summary: ${summary}` : ''}
-Content: ${content.slice(0, 500)}...`;
-      })
+      .map((article: Article) => `Title: ${article.title}
+${article.publishDate ? `Date: ${article.publishDate}` : ''}
+${article.source ? `Source: ${article.source}` : ''}
+${article.summary ? `Summary: ${article.summary}` : ''}
+Content: ${article.content.slice(0, 500)}...`)
       .join('\n\n');
 
-    // First prompt for relevance using GPT-4o
     const relevancePrompt: BaseMessage[] = [
       new HumanMessage(
-        `Here are some articles stored in JSON format. Based on the user's query, return ONLY a valid JSON array of article titles that best match the query. **Do not include any extra text, markdown, or explanations.**
-Example valid response:
-["Title 1", "Title 2"]
-Articles:
-${articlesContent}`
-      ),
-      ...langChainMessages
+        `Here are some articles stored in JSON format. Based on the user's query below, return ONLY a valid JSON array of article titles that best match the query. **Do not include any extra text, markdown, or explanations.**
+        
+        **ALWAYS CHOOSE AT LEAST ONE MATCHING ARTICLE.** If the user's query contains a company or keyword (e.g., "Baker Hughes"), you MUST include the most relevant article for it. 
+    
+        **User's Query:**
+        "${userPrompt}"
+    
+        **Example Valid Response:**
+        ["Title 1", "Title 2"]
+    
+        **Articles:**
+        ${articlesContent}`
+      )
     ];
 
     const relevanceResponse = await modelFirstCall.call(relevancePrompt);
+    console.log("GPT-4o First Response:", relevanceResponse.content);
 
-    // Parse AI response
     let relevantTitles: string[] = [];
     try {
       const cleanedResponse = (relevanceResponse.content as string)
-        .replace(/```json/g, '')
+        .replace(/```json/g, '') 
         .replace(/```/g, '')
         .trim();
-      
-      relevantTitles = JSON.parse(cleanedResponse);
-      
-      if (!Array.isArray(relevantTitles)) {
-        throw new Error('Response is not an array');
-      }
+
+      const jsonMatch = cleanedResponse.match(/\[.*\]/s); 
+      if (!jsonMatch) throw new Error('No valid JSON array found in AI response');
+
+      relevantTitles = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(relevantTitles)) throw new Error('Response is not an array');
+
     } catch (error) {
       console.error('Error parsing relevant article titles:', error);
       return NextResponse.json({ error: 'Invalid AI response format.' }, { status: 500 });
     }
 
-    // Filter articles
-    const selectedArticles = articles.filter((article: Article) =>
-      article.title && relevantTitles.includes(article.title)
-    );
+    const selectedArticles = articles.filter(article => relevantTitles.includes(article.title));
 
     if (selectedArticles.length === 0) {
-      return NextResponse.json({ error: 'No relevant articles found.' }, { status: 404 });
+      console.warn("AI did not find any relevant articles, returning fallback response.");
+      return NextResponse.json({
+        error: 'No relevant articles found.',
+        articlesAvailable: articles.map(a => a.title) 
+      }, { status: 404 });
     }
 
-    // Build the full context article for the second prompt
+    // **🔄 Second AI Query (Processing with GPT-o1)**
+    const modelSecondCall = new ChatOpenAI({
+      openAIApiKey: process.env.OPENAI_API_KEY,
+      modelName: 'o1', // Second call uses GPT-o1
+      temperature: 1,
+    });
+
     const contextArticle = selectedArticles
       .map((article: Article) => `Title: ${article.title}
 ${article.publishDate ? `Date: ${article.publishDate}` : ''}
@@ -147,10 +144,6 @@ ${article.summary ? `Summary: ${article.summary}` : ''}
 Content: ${article.content}`)
       .join('\n\n');
 
-    // Extract the user prompt
-    const userPrompt = messages.find(msg => msg.role === 'user')?.content || '';
-
-    // Second prompt using GPT-o1 with the research assistant structure
     const answerPrompt: BaseMessage[] = [
       new HumanMessage(
         `You are a scientific research assistant tasked with answering questions based on provided context. Your goal is to provide accurate, well-reasoned responses drawing primarily from the information given in the context article.
@@ -185,7 +178,7 @@ Important guidelines:
 - If there are multiple interpretations or possibilities based on the given information, explain these clearly.
 - Use scientific terminology appropriately and explain any complex concepts in a way that is accessible to a general audience.
 
-Remember to maintain a neutral, objective tone throughout your response and prioritize scientific accuracy above all else.`
+Maintain a neutral, objective tone and prioritize scientific accuracy.`
       )
     ];
 
@@ -198,8 +191,6 @@ Remember to maintain a neutral, objective tone throughout your response and prio
 
   } catch (error) {
     console.error('Error:', error);
-    return NextResponse.json({ 
-      error: error instanceof Error ? error.message : 'Failed to process request.' 
-    }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to process request.' }, { status: 500 });
   }
 }
