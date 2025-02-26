@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ChatOpenAI } from '@langchain/openai';
-import { AIMessage, HumanMessage, BaseMessage } from '@langchain/core/messages';
+import {  HumanMessage, BaseMessage } from '@langchain/core/messages';
 import fs from 'fs';
 import path from 'path';
 
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
       
       articles = Object.entries(jsonData)
         .filter(([key]) => key.startsWith('articles_'))
-        .reduce((acc, [_, value]) => {
+        .reduce((acc, [, value]) => {
           if (Array.isArray(value)) {
             acc.push(...value);
           }
@@ -62,9 +62,7 @@ export async function POST(req: Request) {
     }
 
     // Convert messages to LangChain format
-    const langChainMessages: BaseMessage[] = messages.map((msg: ChatMessage) =>
-      msg.role === 'user' ? new HumanMessage(msg.content) : new AIMessage(msg.content)
-    );
+   
 
     // AI Query (Find relevant articles)
     const modelFirstCall = new ChatOpenAI({
@@ -146,7 +144,7 @@ Content: ${article.content}`)
 
     const answerPrompt: BaseMessage[] = [
       new HumanMessage(
-        `You are a scientific research assistant tasked with answering questions based on provided context. Your goal is to provide accurate, well-reasoned responses drawing primarily from the information given in the context article.
+        `Use MARKDOWN with things like bold. You are a scientific research assistant tasked with answering questions based on provided context. Your goal is to provide accurate, well-reasoned responses drawing primarily from the information given in the context article.
 
 First, carefully read and analyze the following context article:
 
